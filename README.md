@@ -34,7 +34,7 @@ registry.your-domain.com
 vpn.your-domain.com
 s3.your-domain.com
 tunnel.your-domain.com
-admin-your-domain.com
+admin.your-domain.com
 ```
 ### Access dashboard
 To access your admin dashboard page you can follow the url: ```http://admin.your-domain.io:8080/```
