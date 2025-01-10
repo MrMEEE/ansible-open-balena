@@ -9,6 +9,22 @@
     password: "{{ balena_user_passwd }}"
     groups: sudo,balena,docker
     append: yes
+  when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+- name: create user balena
+  ansible.builtin.user:
+    name: "{{ balena_username }}"
+    password: "{{ balena_user_passwd | password_hash('sha512') }}"
+    uid: "{{ balena_user_uid }}"
+    state: present
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+- name: create user balena
+  ansible.builtin.user:
+    name: "{{ balena_username }}"
+    groups: wheel,balena
+    append: yes
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
 
 - name: clone open balena
   become_user: balena
@@ -17,6 +33,7 @@
     repo: "{{ ob_repository }}"
     dest: "{{ ob_installation_folder }}"
     clone: true
+    version: "{{ ob_version }}"
 
 - name: curl request to test if open balena is already installed
   ansible.builtin.uri:
@@ -25,6 +42,34 @@
     validate_certs: no
   register: test_curl_ob
   ignore_errors: yes
+
+- name: Check if cgroups v2 is enable 
+  stat:
+    path: /sys/fs/cgroup/cgroup.controllers
+  register: stat_result
+
+- block:
+
+  - name: Change cgroup to v1 # https://open-balena-docs.balena.io/getting-started/
+    shell: |
+      source /etc/default/grub
+      sudo sed -i '/GRUB_CMDLINE_LINUX/d' /etc/default/grub
+      echo GRUB_CMDLINE_LINUX=$(printf '\"%s systemd.unified_cgroup_hierarchy=0\"\n' "${GRUB_CMDLINE_LINUX}") | tee -a /etc/default/grub
+      update-grub
+  
+    when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+  
+  - name: Change cgroup to v1
+    shell: |
+      grubby --update-kernel ALL --args="systemd.unified_cgroup_hierarchy=0"
+    when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+  when: stat_result.stat.exists
+
+- name: Message
+  fail:
+    msg: "Cgroup level 2 was enabled, it has now been disabled, reboot and rerun installation"
+  when: stat_result.stat.exists
 
 - name: Check if the open balena config folder already exist
   block:
@@ -40,18 +85,56 @@
       when: ob_config_stat.stat.exists is defined
   when: test_curl_ob.status != -1
 
+# todo: Ubuntu support for openBalena v4
+
+- name: Allow podman to linger
+  ansible.builtin.shell: loginctl enable-linger {{ balena_user_uid }}
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+- name: Symlink podman-compose to docker-compose
+  ansible.builtin.file:
+    src: /usr/local/bin/podman-compose
+    dest: /usr/local/bin/docker-compose
+    state: link
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+- name: Create local podman config folder
+  ansible.builtin.file:
+    path: /home/{{ balena_username }}/.config/containers/
+    state: directory
+    owner: "{{ balena_username }}"
+    group: "{{ balena_username }}"
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+- name: Make podman use docker.io as default
+  ansible.builtin.lineinfile:
+    path: /home/{{ balena_username }}/.config/containers/registries.conf
+    line: 'unqualified-search-registries = ["docker.io"]'
+    create: true
+    owner: "{{ balena_username }}"
+    group: "{{ balena_username }}"
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
+- name: Allow bind to port 80 for podman
+  ansible.posix.sysctl:
+   name: net.ipv4.ip_unprivileged_port_start
+   value: 80
+   state: present
+   sysctl_set: true
+   reload: true
+  when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux' or ansible_distribution == 'RedHat'
+
 - name: Open balena configuration if necessary
   block:
-    - name: launch open balena quickstart script to create config folder
-      become: true
-      ansible.builtin.command: "{{ ob_quickstart_params }}"
 
-    - name: start docker engine
-      ansible.builtin.service:
-        name: docker
-        state: started
-
-    - name: launch open balena
-      ansible.builtin.command: "{{ ob_script_compose }}"
+    - name: Start installation of openBalena
+      ansible.builtin.shell: |
+        export DNS_TLD={{ ob_domain_name }}
+        cd {{ ob_installation_folder }}
+        make up
+      environment:
+        PATH: "/usr/local/bin:{{ lookup('env','PATH') }}"
 
   when: test_curl_ob.status != 200 or ob_config_stat.stat.exists == false
+  become_user: "{{ balena_username }}"
+  become: true

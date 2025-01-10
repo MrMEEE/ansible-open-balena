@@ -9,8 +9,10 @@ node_gpg_repository: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
 balena_group_name: "balena"
 balena_username: "balena_username"
 balena_user_passwd: "balena_password"
+balena_user_uid: 1000
 
 ob_repository: "https://github.com/balena-io/open-balena.git" # open balena github repository
+ob_version: "main"
 ob_installation_folder: "/home/balena/server"
 ob_script_path: "{{ ob_installation_folder }}/scripts/quickstart" # Main script to install open balena
 ob_admin_email: "your-admin-email"
